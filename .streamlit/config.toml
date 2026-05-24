@@ -1,0 +1,80 @@
+# Uber-inspired theme for the NYC Ridesharing demo.
+# Mirrors uber.com: pure black/white, generous whitespace, geometric sans-serif,
+# small radii, crisp borders. "Uber Move" is proprietary — Inter is the closest
+# freely available substitute and is what Uber uses as a web fallback.
+
+[theme]
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@600;700;800&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+baseFontWeight = 400
+codeFontSize = "0.875rem"
+headingFontSizes = ["48px", "32px", "24px", "18px", "16px", "14px"]
+headingFontWeights = [700, 700, 600, 600, 600, 600]
+linkUnderline = false
+baseRadius = "4px"
+buttonRadius = "999px"     # Uber uses pill-shaped CTAs
+showWidgetBorder = true
+showSidebarBorder = true
+
+# Uber Base brand palette
+redColor = "#E11900"
+orangeColor = "#FF8000"
+yellowColor = "#FFC043"
+greenColor = "#06C167"     # signature "go" green
+blueColor = "#276EF1"
+violetColor = "#7356BF"
+grayColor = "#545454"
+
+# Chart palette: monochrome black-led, with brand accents
+chartCategoricalColors = ["#000000", "#06C167", "#276EF1", "#E11900", "#FFC043", "#7356BF", "#545454"]
+chartSequentialColors = ["#F6F6F6", "#EEEEEE", "#E2E2E2", "#CBCBCB", "#AFAFAF", "#757575", "#545454", "#333333", "#1F1F1F", "#000000"]
+
+# --- LIGHT MODE ---------------------------------------------------------------
+[theme.light]
+primaryColor = "#000000"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F6F6"
+codeBackgroundColor = "#F6F6F6"
+textColor = "#000000"
+linkColor = "#000000"
+codeTextColor = "#000000"
+borderColor = "#E2E2E2"
+dataframeBorderColor = "#E2E2E2"
+dataframeHeaderBackgroundColor = "#F6F6F6"
+
+[theme.light.sidebar]
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#1F1F1F"
+codeBackgroundColor = "#1F1F1F"
+textColor = "#FFFFFF"
+linkColor = "#FFFFFF"
+borderColor = "#1F1F1F"
+primaryColor = "#FFFFFF"
+dataframeHeaderBackgroundColor = "#1F1F1F"
+dataframeBorderColor = "#333333"
+
+# --- DARK MODE ----------------------------------------------------------------
+[theme.dark]
+primaryColor = "#FFFFFF"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#141414"
+codeBackgroundColor = "#141414"
+textColor = "#FFFFFF"
+linkColor = "#FFFFFF"
+codeTextColor = "#FFFFFF"
+borderColor = "#1F1F1F"
+dataframeBorderColor = "#1F1F1F"
+dataframeHeaderBackgroundColor = "#141414"
+
+[theme.dark.sidebar]
+backgroundColor = "#0A0A0A"
+secondaryBackgroundColor = "#1F1F1F"
+codeBackgroundColor = "#1F1F1F"
+textColor = "#FFFFFF"
+linkColor = "#FFFFFF"
+borderColor = "#1F1F1F"
+primaryColor = "#FFFFFF"
+dataframeHeaderBackgroundColor = "#1F1F1F"
+dataframeBorderColor = "#333333"

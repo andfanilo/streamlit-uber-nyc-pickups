@@ -9,6 +9,12 @@ import streamlit as st
 # SETTING PAGE CONFIG TO WIDE MODE AND ADDING A TITLE AND FAVICON
 st.set_page_config(layout="wide", page_title="NYC Ridesharing Demo", page_icon=":taxi:")
 
+# THEME-AWARE STYLING: pick map + chart colors based on the active Streamlit theme
+_IS_DARK = st.context.theme.type == "dark"
+MAP_STYLE = (
+    "mapbox://styles/mapbox/dark-v10" if _IS_DARK else "mapbox://styles/mapbox/light-v10"
+)
+
 
 # LOAD DATA ONCE
 @st.cache_resource
@@ -34,12 +40,12 @@ def load_data():
 
     return data
 
+HEX_LAYER_ID = "hex"
 
-# FUNCTION FOR AIRPORT MAPS
-def map(data, lat, lon, zoom):
-    st.write(
+def map(data, lat, lon, zoom, key=None):
+    return st.pydeck_chart(
         pdk.Deck(
-            map_style="mapbox://styles/mapbox/light-v9",
+            map_style=MAP_STYLE,
             initial_view_state={
                 "latitude": lat,
                 "longitude": lon,
@@ -49,6 +55,7 @@ def map(data, lat, lon, zoom):
             layers=[
                 pdk.Layer(
                     "HexagonLayer",
+                    id=HEX_LAYER_ID,
                     data=data,
                     get_position=["lon", "lat"],
                     radius=100,
@@ -56,9 +63,15 @@ def map(data, lat, lon, zoom):
                     elevation_range=[0, 1000],
                     pickable=True,
                     extruded=True,
+                    auto_highlight=True,
                 ),
             ],
-        )
+            api_keys={"mapbox": st.secrets["MAPBOX_API_KEY"]},
+            tooltip={"text": "{elevationValue} rides"},
+        ),
+        on_select="rerun",
+        selection_mode="single-object",
+        key=key,
     )
 
 
@@ -127,32 +140,38 @@ with row1_2:
     )
 
 # LAYING OUT THE MIDDLE SECTION OF THE APP WITH THE MAPS
-row2_1, row2_2, row2_3, row2_4 = st.columns((2, 1, 1, 1))
+row2_1, row2_2 = st.columns((1.5, 1))
 
 # SETTING THE ZOOM LOCATIONS FOR THE AIRPORTS
-la_guardia = [40.7900, -73.8700]
-jfk = [40.6650, -73.7821]
-newark = [40.7090, -74.1805]
 zoom_level = 12
 midpoint = mpoint(data["lat"], data["lon"])
+
+hour_data = filterdata(data, hour_selected)
 
 with row2_1:
     st.write(
         f"""**All New York City from {hour_selected}:00 and {(hour_selected + 1) % 24}:00**"""
     )
-    map(filterdata(data, hour_selected), midpoint[0], midpoint[1], 11)
+    map_state = map(hour_data, midpoint[0], midpoint[1], 11, key="nyc_map")
 
 with row2_2:
-    st.write("**La Guardia Airport**")
-    map(filterdata(data, hour_selected), la_guardia[0], la_guardia[1], zoom_level)
-
-with row2_3:
-    st.write("**JFK Airport**")
-    map(filterdata(data, hour_selected), jfk[0], jfk[1], zoom_level)
-
-with row2_4:
-    st.write("**Newark Airport**")
-    map(filterdata(data, hour_selected), newark[0], newark[1], zoom_level)
+    picked = (map_state.selection.objects or {}).get(HEX_LAYER_ID, [])
+    if picked:
+        obj = picked[0]
+        rides_in_selection = (
+            len(obj.get("points") or [])
+            or obj.get("count")
+            or obj.get("elevationValue")
+            or obj.get("colorValue")
+            or 0
+        )
+        label = "Rides in selected hex"
+    else:
+        rides_in_selection = len(hour_data)
+        label = f"Total rides {hour_selected:02d}:00–{(hour_selected + 1) % 24:02d}:00"
+    st.metric(label, f"{rides_in_selection:,}")
+    with st.expander("Debug: picked object"):
+        st.write(picked)
 
 # CALCULATING DATA FOR THE HISTOGRAM
 chart_data = histdata(data, hour_selected)
@@ -172,6 +191,8 @@ st.altair_chart(
         y=alt.Y("pickups:Q"),
         tooltip=["minute", "pickups"],
     )
-    .configure_mark(opacity=0.2, color="red"),
-    use_container_width=True,
+    .configure_mark(opacity=0.6, color="blue"),
+    width="stretch",
 )
+
+st.dataframe(data)
