@@ -30,7 +30,7 @@ st.html("./styles.css")
 ###################################################
 
 
-@st.cache_resource
+@st.cache_data
 def load_data():
     """Load data from zip into cache"""
     path = "uber-raw-data-sep14.csv.gz"
@@ -63,12 +63,6 @@ def filterdata(df, start_time, end_time):
         return df[(times >= start_time) & (times < end_time)]
     # range crosses midnight
     return df[(times >= start_time) | (times < end_time)]
-
-
-@st.cache_data
-def mpoint(lat, lon):
-    """Calculate midpoint for given set of data"""
-    return (np.average(lat), np.average(lon))
 
 
 @st.cache_data
@@ -117,8 +111,11 @@ MAP_STYLE = (
 CHART_COLOR = "#FFFFFF" if _IS_DARK else "#000000"
 HEX_LAYER_ID = "hex"
 
+MAP_HEIGHT = 450
+HISTOGRAM_HEIGHT = 300
 
-def map(data, lat, lon, zoom=11, height=350, key=None):
+
+def render_map(data, lat, lon, zoom=11, height=350, key=None):
     return st.pydeck_chart(
         pdk.Deck(
             layers=[
@@ -180,13 +177,14 @@ map_column, kpi_column = st.columns(
 st.space("small")
 
 
-histogram_container = st.container(border=False, height=250)
+histogram_container = st.container(border=False, height=HISTOGRAM_HEIGHT)
 
 ###################################################
 # APP
 ###################################################
 
 data = load_data()
+midpoint = (np.average(data["lat"]), np.average(data["lon"]))
 
 with left_header:
     st.title("NYC Uber Ridesharing Data")
@@ -227,12 +225,13 @@ selected_end_hour = add_minutes(
 hour_data = filterdata(data, selected_start_hour, selected_end_hour)
 
 with map_column:
-    midpoint = mpoint(data["lat"], data["lon"])
     start_label = selected_start_hour.strftime("%H:%M")
     end_label = selected_end_hour.strftime("%H:%M")
 
     kpi_label.write(f"""**All New York City from {start_label} to {end_label}**""")
-    map_state = map(hour_data, midpoint[0], midpoint[1], height=400, key="nyc_map")
+    map_state = render_map(
+        hour_data, midpoint[0], midpoint[1], height=MAP_HEIGHT, key="nyc_map"
+    )
 
 with kpi_column:
     picked = (map_state.selection.objects or {}).get(HEX_LAYER_ID, [])
