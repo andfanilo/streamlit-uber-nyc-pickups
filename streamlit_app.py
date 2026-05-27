@@ -39,7 +39,7 @@ def load_data():
 
     data = pd.read_csv(
         path,
-        nrows=100000,  # approx. 10% of data
+        # nrows=100000,  # approx. 10% of data
         names=[
             "date/time",
             "lat",
@@ -50,7 +50,7 @@ def load_data():
         parse_dates=[
             "date/time"
         ],  # set as datetime instead of converting after the fact
-    )
+    ).sample(100000, random_state=42)
 
     return data
 
@@ -73,16 +73,37 @@ def mpoint(lat, lon):
 
 @st.cache_data
 def histdata(df, start_time, end_time):
-    """Compute pickups per minute-of-hour within a time-of-day range"""
+    """Pickups per minute-of-window, indexed 0..duration-1 from start_time"""
     filtered = filterdata(df, start_time, end_time)
-    hist = np.histogram(filtered["date/time"].dt.minute, bins=60, range=(0, 60))[0]
-    return pd.DataFrame({"minute": range(60), "pickups": hist})
+    start_min = start_time.hour * 60 + start_time.minute
+    end_min = end_time.hour * 60 + end_time.minute
+    duration = (end_min - start_min) % (24 * 60) or 24 * 60
+    ride_min = filtered["date/time"].dt.hour * 60 + filtered["date/time"].dt.minute
+    offset = (ride_min - start_min) % (24 * 60)
+    hist = np.histogram(offset, bins=duration, range=(0, duration))[0]
+    return pd.DataFrame({"minute": range(duration), "pickups": hist})
 
 
-def add_hour(t):
-    """Add one hour to a date"""
-    return (datetime.combine(date.today(), t) + timedelta(hours=1)).time()
+@st.cache_data
+def daily_counts(df, start_time, end_time):
+    """Rides per calendar day within a time-of-day window"""
+    filtered = filterdata(df, start_time, end_time)
+    all_days = pd.date_range(
+        df["date/time"].min().normalize(),
+        df["date/time"].max().normalize(),
+        freq="D",
+    )
+    counts = filtered.groupby(filtered["date/time"].dt.normalize()).size()
+    counts = counts.reindex(all_days, fill_value=0)
+    return pd.DataFrame({"day": counts.index.day, "rides": counts.values})
 
+
+def add_minutes(t, minutes):
+    """Shift a time-of-day by N minutes (wraps past midnight)"""
+    return (datetime.combine(date.today(), t) + timedelta(minutes=minutes)).time()
+
+
+DURATION_OPTIONS = {"15 min": 15, "30 min": 30, "1 hour": 60}
 
 ###################################################
 # VISUALIZATION
@@ -93,10 +114,11 @@ MAP_STYLE = (
     if _IS_DARK
     else "mapbox://styles/mapbox/light-v10"
 )
+CHART_COLOR = "#FFFFFF" if _IS_DARK else "#000000"
 HEX_LAYER_ID = "hex"
 
 
-def map(data, lat, lon, zoom, key=None):
+def map(data, lat, lon, zoom=11, height=350, key=None):
     return st.pydeck_chart(
         pdk.Deck(
             layers=[
@@ -127,7 +149,7 @@ def map(data, lat, lon, zoom, key=None):
         ),
         on_select="rerun",
         selection_mode="single-object",
-        height=350,
+        height=height,
         key=key,
     )
 
@@ -150,6 +172,7 @@ filters_container, _ = st.columns(
 st.space("small")
 
 # Map + KPIs
+kpi_label = st.empty()
 map_column, kpi_column = st.columns(
     (1.5, 1),
     gap="large",
@@ -157,7 +180,7 @@ map_column, kpi_column = st.columns(
 st.space("small")
 
 
-histogram_container = st.container()
+histogram_container = st.container(border=False, height=250)
 
 ###################################################
 # APP
@@ -172,13 +195,15 @@ with right_header:
     st.space("small")
     st.markdown(
         """
-        Examining how Uber pickups vary over time in New York City's and at its major regional airports.
-        By sliding the slider on the left you can view different slices of time and explore different transportation trends.
+        Explore Uber pickups across New York City throughout September 2014.
+        Pick a start hour and a duration on the left. The map shows where pickups cluster, the card tracks
+        rides per day in that window, and the chart below breaks the window down minute by minute.
+        Click a hex to inspect a specific neighborhood.
         """
     )
 
 with filters_container:
-    start_col, end_col = st.columns(2)
+    start_col, end_col = st.columns(2, gap="large")
     with start_col:
         selected_start_hour = st.time_input(
             "Start hour",
@@ -187,40 +212,69 @@ with filters_container:
             bind="query-params",
         )
     with end_col:
-        selected_end_hour = st.time_input(
-            "End hour",
-            value=None,
-            key="end_hour",
+        selected_duration = st.pills(
+            "Duration",
+            options=list(DURATION_OPTIONS),
+            default="1 hour",
+            key="duration",
             bind="query-params",
         )
 
-if selected_end_hour is None:
-    selected_end_hour = add_hour(selected_start_hour)
+selected_end_hour = add_minutes(
+    selected_start_hour, DURATION_OPTIONS[selected_duration]
+)
 
 hour_data = filterdata(data, selected_start_hour, selected_end_hour)
 
 with map_column:
-    zoom_level = 11
     midpoint = mpoint(data["lat"], data["lon"])
     start_label = selected_start_hour.strftime("%H:%M")
     end_label = selected_end_hour.strftime("%H:%M")
 
-    st.write(f"""**All New York City from {start_label} to {end_label}**""")
-    map_state = map(hour_data, midpoint[0], midpoint[1], zoom_level, key="nyc_map")
+    kpi_label.write(f"""**All New York City from {start_label} to {end_label}**""")
+    map_state = map(hour_data, midpoint[0], midpoint[1], height=400, key="nyc_map")
 
 with kpi_column:
     picked = (map_state.selection.objects or {}).get(HEX_LAYER_ID, [])
-    if picked:
-        obj = picked[0]
-        rides_in_selection = obj.get("count")
-        label = "Rides in selected hex"
-    else:
-        rides_in_selection = len(hour_data)
-        label = f"Total rides {start_label}–{end_label}"
+    with st.container(
+        border=True,
+        gap="medium",
+        height="stretch",
+        key="kpi_container",
+    ):
+        if picked:
+            hex_count = picked[0].get("count") or 0
+            window_total = len(hour_data)
+            share_pct = hex_count / window_total * 100 if window_total else 0
+            st.metric(
+                f"Rides in selected hex from {start_label} to {end_label}",
+                f"{hex_count:,}",
+                delta=f"{share_pct:.1f}% of rides in window",
+                delta_color="off",
+                delta_arrow="off",
+                border=False,
+            )
+        else:
+            total_in_window = len(hour_data)
+            share_pct = total_in_window / len(data) * 100 if len(data) else 0
+            st.metric(
+                f"Total rides from {start_label} to {end_label}",
+                f"{total_in_window:,}",
+                delta=f"{share_pct:.1f}% of September rides",
+                delta_color="off",
+                delta_arrow="off",
+                border=False,
+            )
 
-    st.markdown("")
-    st.space("small")
-    st.metric(label, f"{rides_in_selection:,}", border=True)
+        st.bar_chart(
+            daily_counts(data, selected_start_hour, selected_end_hour),
+            x="day",
+            y="rides",
+            color=CHART_COLOR,
+            x_label="Day of September",
+            y_label="Rides",
+            height="stretch",
+        )
 
 chart_data = histdata(data, selected_start_hour, selected_end_hour)
 
@@ -228,23 +282,24 @@ with histogram_container:
     st.write(
         f"""**Breakdown of rides per minute between {start_label} and {end_label}**"""
     )
-
-    chart_color = "#FFFFFF" if _IS_DARK else "#000000"
     st.altair_chart(
         alt.Chart(chart_data)
-        .mark_area(
-            interpolate="step-after",
-        )
+        .mark_area(interpolate="monotone", color=CHART_COLOR, opacity=0.85)
         .encode(
-            x=alt.X("minute:Q", scale=alt.Scale(nice=False)),
-            y=alt.Y("pickups:Q"),
+            x=alt.X(
+                "minute:Q",
+                scale=alt.Scale(nice=False),
+                title=f"Minute from {start_label}",
+            ),
+            y=alt.Y("pickups:Q", title="Pickups"),
             tooltip=["minute", "pickups"],
-        )
-        .configure_mark(opacity=0.6, color=chart_color),
+        ),
+        height="stretch",
         width="stretch",
         theme="streamlit",
     )
 
+st.stop()
 st.space("small")
 with st.expander("DEBUG", icon=":material/bug_report:"):
     st.dataframe(data)
