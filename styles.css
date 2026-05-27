@@ -1,0 +1,4 @@
+/* Singular "ride" when hex contains exactly one pickup */
+.hex-tip[data-count="1"] .plural {
+    display: none;
+}
