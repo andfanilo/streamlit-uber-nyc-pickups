@@ -3,12 +3,18 @@ from datetime import date
 from datetime import datetime
 from datetime import time
 from datetime import timedelta
+from random import uniform
+from time import sleep
 
 import altair as alt
 import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
+
+# Simulated per-chart loading delay in seconds (min, max), so the parallel
+# loading checkbox has a visible effect in the demo.
+FAKE_CHART_DELAY_S = (0.5, 1.5)
 
 ###################################################
 # PAGE CONFIG
@@ -209,6 +215,95 @@ def render_map(data, lat, lon, zoom=11, height=350, key=None):
 EXTRA_CHART_HEIGHT = 260
 
 
+def render_map_fragment(hour_data, lat, lon):
+    """Pickup map; propagates hex selection changes to the rest of the app"""
+    sleep(uniform(*FAKE_CHART_DELAY_S))  # simulate a slow data source for the demo
+    map_state = render_map(hour_data, lat, lon, height=MAP_HEIGHT, key="nyc_map")
+    picked = (map_state.selection.objects or {}).get(HEX_LAYER_ID, [])
+    hex_count = picked[0].get("count") if picked else None
+    # A hex click only reruns this fragment; trigger a full rerun so the KPI
+    # fragment (in another column) picks up the new selection.
+    if st.session_state.get("picked_hex_count") != hex_count:
+        st.session_state.picked_hex_count = hex_count
+        st.rerun(scope="app")
+
+
+def render_kpi_fragment(data, hour_data, start_time, end_time, start_label, end_label):
+    """Ride-count metric (whole window or selected hex) plus rides per day"""
+    sleep(uniform(*FAKE_CHART_DELAY_S))  # simulate a slow data source for the demo
+    map_sel = st.session_state.get("nyc_map")
+    picked = (
+        (map_sel.selection.objects or {}).get(HEX_LAYER_ID, []) if map_sel else []
+    )
+    # Explicit height: "stretch" collapses inside the fragment's auto-height
+    # wrapper container; match the map so the row lines up.
+    with st.container(
+        border=True,
+        gap="medium",
+        height=MAP_HEIGHT,
+        key="kpi_container",
+    ):
+        if picked:
+            hex_count = picked[0].get("count") or 0
+            window_total = len(hour_data)
+            share_pct = hex_count / window_total * 100 if window_total else 0
+            st.metric(
+                f"Rides in selected hex from {start_label} to {end_label}",
+                f"{hex_count:,}",
+                delta=f"{share_pct:.1f}% of rides in window",
+                delta_color="off",
+                delta_arrow="off",
+                border=False,
+            )
+        else:
+            total_in_window = len(hour_data)
+            share_pct = total_in_window / len(data) * 100 if len(data) else 0
+            st.metric(
+                f"Total rides from {start_label} to {end_label}",
+                f"{total_in_window:,}",
+                delta=f"{share_pct:.1f}% of September rides",
+                delta_color="off",
+                delta_arrow="off",
+                border=False,
+            )
+
+        st.bar_chart(
+            daily_counts(data, start_time, end_time),
+            x="day",
+            y="rides",
+            color=CHART_COLOR,
+            x_label="Day of September",
+            y_label="Rides",
+            height="stretch",
+        )
+
+
+def render_minute_fragment(data, start_time, end_time, start_label, end_label):
+    """Minute-by-minute breakdown of pickups within the selected window"""
+    sleep(uniform(*FAKE_CHART_DELAY_S))  # simulate a slow data source for the demo
+    st.write(
+        f"""**Breakdown of rides per minute between {start_label} and {end_label}**"""
+    )
+    st.altair_chart(
+        alt.Chart(histdata(data, start_time, end_time))
+        .mark_area(interpolate="monotone", color=CHART_COLOR, opacity=0.85)
+        .encode(
+            x=alt.X(
+                "minute:Q",
+                scale=alt.Scale(nice=False),
+                title=f"Minute from {start_label}",
+            ),
+            y=alt.Y("pickups:Q", title="Pickups"),
+            tooltip=["minute", "pickups"],
+        ),
+        # Explicit height: "stretch" collapses inside the fragment's
+        # auto-height wrapper container; leave room for the header above.
+        height=HISTOGRAM_HEIGHT - 60,
+        width="stretch",
+        theme="streamlit",
+    )
+
+
 def highlight_segments(start_time, end_time):
     """Hour-of-day span(s) covering the selected window, as (start, end) floats"""
     start_h = start_time.hour + start_time.minute / 60
@@ -218,9 +313,12 @@ def highlight_segments(start_time, end_time):
     return [(start_h, 24.0), (0.0, end_h)]  # window wraps past midnight
 
 
-@st.fragment(parallel=True)
+# The three chart renderers below are wrapped with st.fragment at the call
+# site, so the "Load charts in parallel" checkbox can switch dispatch between
+# parallel workers and inline execution on every rerun.
 def render_borough_fragment(data, start_time, end_time, start_label, end_label):
     """Rides per rough NYC borough, fully scoped to the selected window"""
+    sleep(uniform(*FAKE_CHART_DELAY_S))  # simulate a slow data source for the demo
     st.write(f"**Rides by borough from {start_label} to {end_label}**")
     st.altair_chart(
         alt.Chart(borough_counts(data, start_time, end_time))
@@ -237,9 +335,9 @@ def render_borough_fragment(data, start_time, end_time, start_label, end_label):
     )
 
 
-@st.fragment(parallel=True)
 def render_heatmap_fragment(data, start_time, end_time):
     """Hour x weekday heatmap across all data, with the selected window boxed"""
+    sleep(uniform(*FAKE_CHART_DELAY_S))  # simulate a slow data source for the demo
     st.write("**Rides by hour & weekday (selected window boxed)**")
     heat = hourly_weekday_counts(data).assign(hour_end=lambda d: d["hour"] + 1)
     highlight = pd.DataFrame(
@@ -274,9 +372,9 @@ def render_heatmap_fragment(data, start_time, end_time):
     )
 
 
-@st.fragment(parallel=True)
 def render_gap_fragment(data, start_time, end_time, start_label, end_label):
     """Distribution of seconds between consecutive pickups in the selected window"""
+    sleep(uniform(*FAKE_CHART_DELAY_S))  # simulate a slow data source for the demo
     st.write(f"**Time between pickups from {start_label} to {end_label}**")
     st.altair_chart(
         alt.Chart(gap_data(data, start_time, end_time))
@@ -366,6 +464,14 @@ with filters_container:
             key="duration",
             bind="query-params",
         )
+    use_parallel = st.checkbox(
+        "Load charts in parallel",
+        value=True,
+        key="parallel",
+        bind="query-params",
+        help="Dispatch every chart as a parallel fragment "
+        "(st.fragment(parallel=True)) instead of rendering them inline.",
+    )
 
 selected_end_hour = add_minutes(
     selected_start_hour, DURATION_OPTIONS[selected_duration]
@@ -373,89 +479,44 @@ selected_end_hour = add_minutes(
 
 hour_data = filterdata(data, selected_start_hour, selected_end_hour)
 
-with map_column:
-    start_label = selected_start_hour.strftime("%H:%M")
-    end_label = selected_end_hour.strftime("%H:%M")
+start_label = selected_start_hour.strftime("%H:%M")
+end_label = selected_end_hour.strftime("%H:%M")
 
-    kpi_label.write(f"""**All New York City from {start_label} to {end_label}**""")
-    map_state = render_map(
-        hour_data, midpoint[0], midpoint[1], height=MAP_HEIGHT, key="nyc_map"
-    )
+# Every chart simulates its own slow data source and is dispatched as a
+# fragment; the checkbox switches them between parallel and inline execution.
+as_fragment = st.fragment(parallel=use_parallel)
+
+kpi_label.write(f"""**All New York City from {start_label} to {end_label}**""")
+
+with map_column:
+    as_fragment(render_map_fragment)(hour_data, midpoint[0], midpoint[1])
 
 with kpi_column:
-    picked = (map_state.selection.objects or {}).get(HEX_LAYER_ID, [])
-    with st.container(
-        border=True,
-        gap="medium",
-        height="stretch",
-        key="kpi_container",
-    ):
-        if picked:
-            hex_count = picked[0].get("count") or 0
-            window_total = len(hour_data)
-            share_pct = hex_count / window_total * 100 if window_total else 0
-            st.metric(
-                f"Rides in selected hex from {start_label} to {end_label}",
-                f"{hex_count:,}",
-                delta=f"{share_pct:.1f}% of rides in window",
-                delta_color="off",
-                delta_arrow="off",
-                border=False,
-            )
-        else:
-            total_in_window = len(hour_data)
-            share_pct = total_in_window / len(data) * 100 if len(data) else 0
-            st.metric(
-                f"Total rides from {start_label} to {end_label}",
-                f"{total_in_window:,}",
-                delta=f"{share_pct:.1f}% of September rides",
-                delta_color="off",
-                delta_arrow="off",
-                border=False,
-            )
-
-        st.bar_chart(
-            daily_counts(data, selected_start_hour, selected_end_hour),
-            x="day",
-            y="rides",
-            color=CHART_COLOR,
-            x_label="Day of September",
-            y_label="Rides",
-            height="stretch",
-        )
+    as_fragment(render_kpi_fragment)(
+        data,
+        hour_data,
+        selected_start_hour,
+        selected_end_hour,
+        start_label,
+        end_label,
+    )
 
 with extra_charts_row:
     borough_col, heatmap_col, gap_col = st.columns(3, gap="large")
     with borough_col:
-        render_borough_fragment(
+        as_fragment(render_borough_fragment)(
             data, selected_start_hour, selected_end_hour, start_label, end_label
         )
     with heatmap_col:
-        render_heatmap_fragment(data, selected_start_hour, selected_end_hour)
+        as_fragment(render_heatmap_fragment)(
+            data, selected_start_hour, selected_end_hour
+        )
     with gap_col:
-        render_gap_fragment(
+        as_fragment(render_gap_fragment)(
             data, selected_start_hour, selected_end_hour, start_label, end_label
         )
 
-chart_data = histdata(data, selected_start_hour, selected_end_hour)
-
 with histogram_container:
-    st.write(
-        f"""**Breakdown of rides per minute between {start_label} and {end_label}**"""
-    )
-    st.altair_chart(
-        alt.Chart(chart_data)
-        .mark_area(interpolate="monotone", color=CHART_COLOR, opacity=0.85)
-        .encode(
-            x=alt.X(
-                "minute:Q",
-                scale=alt.Scale(nice=False),
-                title=f"Minute from {start_label}",
-            ),
-            y=alt.Y("pickups:Q", title="Pickups"),
-            tooltip=["minute", "pickups"],
-        ),
-        height="stretch",
-        width="stretch",
-        theme="streamlit",
+    as_fragment(render_minute_fragment)(
+        data, selected_start_hour, selected_end_hour, start_label, end_label
     )
