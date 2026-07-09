@@ -92,12 +92,66 @@ def daily_counts(df, start_time, end_time):
     return pd.DataFrame({"day": counts.index.day, "rides": counts.values})
 
 
+# Rough NYC borough bounding boxes (not official boundaries) used to bucket
+# pickups by lat/lon for a quick borough-level breakdown.
+@st.cache_data
+def borough_counts(df, start_time, end_time):
+    """Rides per rough NYC borough within a time-of-day window"""
+    filtered = filterdata(df, start_time, end_time)
+    lat, lon = filtered["lat"], filtered["lon"]
+    conditions = [
+        (lat >= 40.699) & (lat <= 40.882) & (lon >= -74.019) & (lon <= -73.907),
+        (lat >= 40.785) & (lon >= -73.933) & (lon <= -73.765),
+        lon <= -74.05,
+        (lat >= 40.700) & (lon > -73.962) & (lon <= -73.70),
+        (lat >= 40.570) & (lat < 40.739) & (lon >= -74.05) & (lon <= -73.83),
+    ]
+    choices = ["Manhattan", "Bronx", "Staten Island", "Queens", "Brooklyn"]
+    borough = np.select(conditions, choices, default="Other")
+    counts = (
+        pd.Series(borough, name="borough")
+        .value_counts()
+        .rename_axis("borough")
+        .reset_index(name="rides")
+        .sort_values("rides", ascending=False)
+    )
+    return counts
+
+
+@st.cache_data
+def hourly_weekday_counts(df):
+    """Pickups by hour-of-day x day-of-week, across the full dataset"""
+    d = df.assign(
+        hour=df["date/time"].dt.hour,
+        weekday=df["date/time"].dt.day_name(),
+    )
+    return d.groupby(["weekday", "hour"]).size().reset_index(name="rides")
+
+
+@st.cache_data
+def gap_data(df, start_time, end_time):
+    """Seconds between consecutive pickups within a time-of-day window"""
+    filtered = filterdata(df, start_time, end_time).sort_values("date/time")
+    gaps = filtered["date/time"].diff().dt.total_seconds().dropna()
+    gaps = gaps[(gaps > 0) & (gaps < 600)]  # drop cross-day jumps / outliers
+    return pd.DataFrame({"gap_seconds": gaps})
+
+
 def add_minutes(t, minutes):
     """Shift a time-of-day by N minutes (wraps past midnight)"""
     return (datetime.combine(date.today(), t) + timedelta(minutes=minutes)).time()
 
 
 DURATION_OPTIONS = {"15 min": 15, "30 min": 30, "1 hour": 60}
+WEEKDAY_ORDER = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
 
 ###################################################
 # VISUALIZATION
@@ -134,6 +188,7 @@ def render_map(data, lat, lon, zoom=11, height=350, key=None):
             ],
             api_keys={"mapbox": st.secrets["MAPBOX_API_KEY"]},
             map_provider="mapbox",
+            map_style=MAP_STYLE,
             initial_view_state={
                 "latitude": lat,
                 "longitude": lon,
@@ -148,6 +203,97 @@ def render_map(data, lat, lon, zoom=11, height=350, key=None):
         selection_mode="single-object",
         height=height,
         key=key,
+    )
+
+
+EXTRA_CHART_HEIGHT = 260
+
+
+def highlight_segments(start_time, end_time):
+    """Hour-of-day span(s) covering the selected window, as (start, end) floats"""
+    start_h = start_time.hour + start_time.minute / 60
+    end_h = end_time.hour + end_time.minute / 60
+    if start_h <= end_h:
+        return [(start_h, end_h)]
+    return [(start_h, 24.0), (0.0, end_h)]  # window wraps past midnight
+
+
+@st.fragment(parallel=True)
+def render_borough_fragment(data, start_time, end_time, start_label, end_label):
+    """Rides per rough NYC borough, fully scoped to the selected window"""
+    st.write(f"**Rides by borough from {start_label} to {end_label}**")
+    st.altair_chart(
+        alt.Chart(borough_counts(data, start_time, end_time))
+        .mark_bar(color=CHART_COLOR, opacity=0.85)
+        .encode(
+            x=alt.X("borough:N", sort="-y", title="Borough"),
+            y=alt.Y("rides:Q", title="Rides"),
+            tooltip=["borough", "rides"],
+        ),
+        height=EXTRA_CHART_HEIGHT,
+        width="stretch",
+        theme="streamlit",
+        key="borough_chart",
+    )
+
+
+@st.fragment(parallel=True)
+def render_heatmap_fragment(data, start_time, end_time):
+    """Hour x weekday heatmap across all data, with the selected window boxed"""
+    st.write("**Rides by hour & weekday (selected window boxed)**")
+    heat = hourly_weekday_counts(data).assign(hour_end=lambda d: d["hour"] + 1)
+    highlight = pd.DataFrame(
+        highlight_segments(start_time, end_time), columns=["hour_start", "hour_end"]
+    )
+
+    base = alt.Chart(heat).mark_rect().encode(
+        x=alt.X(
+            "hour:Q", title="Hour of day", scale=alt.Scale(domain=[0, 24], nice=False)
+        ),
+        x2="hour_end:Q",
+        y=alt.Y("weekday:N", sort=WEEKDAY_ORDER, title=None),
+        color=alt.Color(
+            "rides:Q",
+            title="Rides",
+            scale=alt.Scale(scheme="greys", reverse=_IS_DARK),
+        ),
+        tooltip=["weekday", "hour", "rides"],
+    )
+    box = (
+        alt.Chart(highlight)
+        .mark_rect(fill=None, stroke=CHART_COLOR, strokeWidth=2)
+        .encode(x=alt.X("hour_start:Q"), x2="hour_end:Q")
+    )
+
+    st.altair_chart(
+        base + box,
+        height=EXTRA_CHART_HEIGHT,
+        width="stretch",
+        theme="streamlit",
+        key="heatmap_chart",
+    )
+
+
+@st.fragment(parallel=True)
+def render_gap_fragment(data, start_time, end_time, start_label, end_label):
+    """Distribution of seconds between consecutive pickups in the selected window"""
+    st.write(f"**Time between pickups from {start_label} to {end_label}**")
+    st.altair_chart(
+        alt.Chart(gap_data(data, start_time, end_time))
+        .mark_bar(color=CHART_COLOR, opacity=0.85)
+        .encode(
+            x=alt.X(
+                "gap_seconds:Q",
+                bin=alt.Bin(maxbins=40),
+                title="Seconds since previous pickup",
+            ),
+            y=alt.Y("count():Q", title="Occurrences"),
+            tooltip=[alt.Tooltip("count()", title="Occurrences")],
+        ),
+        height=EXTRA_CHART_HEIGHT,
+        width="stretch",
+        theme="streamlit",
+        key="gap_chart",
     )
 
 
@@ -169,13 +315,16 @@ filters_container, _ = st.columns(
 st.space("small")
 
 # Map + KPIs
-kpi_label = st.empty()
+kpi_label = st.container()
 map_column, kpi_column = st.columns(
     (1.5, 1),
     gap="large",
 )
 st.space("small")
 
+# Three parallel-loading fragments (st.fragment(parallel=True))
+extra_charts_row = st.container(border=False)
+st.space("small")
 
 histogram_container = st.container(border=False, height=HISTOGRAM_HEIGHT)
 
@@ -275,6 +424,19 @@ with kpi_column:
             height="stretch",
         )
 
+with extra_charts_row:
+    borough_col, heatmap_col, gap_col = st.columns(3, gap="large")
+    with borough_col:
+        render_borough_fragment(
+            data, selected_start_hour, selected_end_hour, start_label, end_label
+        )
+    with heatmap_col:
+        render_heatmap_fragment(data, selected_start_hour, selected_end_hour)
+    with gap_col:
+        render_gap_fragment(
+            data, selected_start_hour, selected_end_hour, start_label, end_label
+        )
+
 chart_data = histdata(data, selected_start_hour, selected_end_hour)
 
 with histogram_container:
@@ -297,10 +459,3 @@ with histogram_container:
         width="stretch",
         theme="streamlit",
     )
-
-st.stop()
-st.space("small")
-with st.expander("DEBUG", icon=":material/bug_report:"):
-    st.dataframe(data)
-    st.write(map_state.selection.objects)
-    st.write(st.context.headers)
